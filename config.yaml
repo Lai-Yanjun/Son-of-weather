@@ -32,6 +32,9 @@ shadow:
   # 影子账户初始可用资金（USDC）
   initial_cash_usdc: 400
 
+  # 全部跟随模式：开启后不再因 TOO_SMALL/滑点/敞口/熔断/白名单而跳过（仍受限于：映射失败、现金不足、没仓位可卖）
+  follow_all: true
+
   # 轮询：建议别太激进，避免 Cloudflare/边缘限流
   poll_interval_sec: 5
   jitter_sec: 0.8
@@ -43,7 +46,7 @@ shadow:
   dedupe_ttl_sec: 1209600  # 14 天
 
   # 跟随缩放：按“成交成本敞口(USDC)”缩放（BUY 用 usdcSize，SELL 也按 usdcSize 近似）
-  k: 0.25
+  k: 0.5
   min_per_trade_usdc: 5
   max_per_trade_usdc: 25
 

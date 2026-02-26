@@ -223,6 +223,7 @@ def run_shadow(*, cfg: AppConfig, out_dir: Path, state_db_path: Path, duration_s
             "end_ts": end_ts,
             "cfg": {
                 "initial_cash_usdc": cfg.shadow_initial_cash_usdc,
+                "follow_all": bool(cfg.shadow_follow_all),
                 "k": cfg.shadow_k,
                 "min_per_trade_usdc": cfg.shadow_min_per_trade_usdc,
                 "max_per_trade_usdc": cfg.shadow_max_per_trade_usdc,
@@ -314,11 +315,12 @@ def run_shadow(*, cfg: AppConfig, out_dir: Path, state_db_path: Path, duration_s
             decision_ts = int(time.time())
             reason: str | None = None
 
-            if cfg.shadow_condition_whitelist and mt.condition_id not in set(cfg.shadow_condition_whitelist):
-                reason = "NOT_IN_WHITELIST"
+            if not cfg.shadow_follow_all:
+                if cfg.shadow_condition_whitelist and mt.condition_id not in set(cfg.shadow_condition_whitelist):
+                    reason = "NOT_IN_WHITELIST"
 
-            if circuit and reason is None:
-                reason = "DAILY_LOSS_CIRCUIT_BREAKER"
+                if circuit and reason is None:
+                    reason = "DAILY_LOSS_CIRCUIT_BREAKER"
 
             mapping = None
             if reason is None:
@@ -349,31 +351,45 @@ def run_shadow(*, cfg: AppConfig, out_dir: Path, state_db_path: Path, duration_s
                 try:
                     best_buy, best_sell = clob.get_best_prices(mapping.token_id)
                 except Exception as e:
-                    reason = f"QUOTE_FAILED:{type(e).__name__}"
+                    if cfg.shadow_follow_all:
+                        # 全部跟随模式：无法 quote 时，退化用对方成交价作为执行价（影子近似）
+                        best_buy = None
+                        best_sell = None
+                    else:
+                        reason = f"QUOTE_FAILED:{type(e).__name__}"
 
             # sizing
             his_cost = abs(float(mt.total_usdc)) if float(mt.total_usdc) else abs(float(mt.total_shares) * float(mt.avg_price))
             you_cost = min(float(cfg.shadow_k) * float(his_cost), float(cfg.shadow_max_per_trade_usdc))
-            if reason is None and you_cost < float(cfg.shadow_min_per_trade_usdc):
-                reason = "TOO_SMALL"
+            if not cfg.shadow_follow_all:
+                if reason is None and you_cost < float(cfg.shadow_min_per_trade_usdc):
+                    reason = "TOO_SMALL"
 
             # exposure limits
             total_cost_exposure, by_market = _compute_exposure(db)
             market_cost_exposure = float(by_market.get(mt.condition_id, 0.0))
-            if reason is None and (total_cost_exposure + you_cost) > float(cfg.shadow_max_total_exposure_usdc) and mt.side.upper() == "BUY":
-                reason = "TOTAL_EXPOSURE_LIMIT"
-            if reason is None and (market_cost_exposure + you_cost) > float(cfg.shadow_max_market_exposure_usdc) and mt.side.upper() == "BUY":
-                reason = "MARKET_EXPOSURE_LIMIT"
+            if not cfg.shadow_follow_all:
+                if reason is None and (total_cost_exposure + you_cost) > float(cfg.shadow_max_total_exposure_usdc) and mt.side.upper() == "BUY":
+                    reason = "TOTAL_EXPOSURE_LIMIT"
+                if reason is None and (market_cost_exposure + you_cost) > float(cfg.shadow_max_market_exposure_usdc) and mt.side.upper() == "BUY":
+                    reason = "MARKET_EXPOSURE_LIMIT"
 
             # slippage & executable price
             exec_price = None
             slip_abs = None
-            if reason is None and best_buy is not None and best_sell is not None:
-                exec_price = float(best_buy) if mt.side.upper() == "BUY" else float(best_sell)
-                slip_abs = abs(float(exec_price) - float(mt.avg_price))
-                slippage_abs_samples.append(float(slip_abs))
-                if float(slip_abs) > float(cfg.shadow_max_abs_slippage):
-                    reason = "SLIPPAGE_TOO_HIGH"
+            if reason is None:
+                if best_buy is not None and best_sell is not None:
+                    exec_price = float(best_buy) if mt.side.upper() == "BUY" else float(best_sell)
+                    slip_abs = abs(float(exec_price) - float(mt.avg_price))
+                    slippage_abs_samples.append(float(slip_abs))
+                    if (not cfg.shadow_follow_all) and float(slip_abs) > float(cfg.shadow_max_abs_slippage):
+                        reason = "SLIPPAGE_TOO_HIGH"
+                else:
+                    # quote 缺失时（仅在 follow_all 允许），用对方成交价作影子执行价
+                    if cfg.shadow_follow_all:
+                        exec_price = float(mt.avg_price)
+                        slip_abs = 0.0
+                        slippage_abs_samples.append(0.0)
 
             # simulate fill
             fill = None

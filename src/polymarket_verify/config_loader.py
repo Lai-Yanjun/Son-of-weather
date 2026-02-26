@@ -28,6 +28,7 @@ class AppConfig:
     jitter_sec: float
 
     shadow_initial_cash_usdc: float
+    shadow_follow_all: bool
     shadow_poll_interval_sec: float
     shadow_jitter_sec: float
     shadow_fetch_limit: int
@@ -76,6 +77,7 @@ def load_config(path: str | Path) -> AppConfig:
         jitter_sec=float(_get(polling, "jitter_sec", 0.5)),
 
         shadow_initial_cash_usdc=float(_get(shadow, "initial_cash_usdc", 400)),
+        shadow_follow_all=bool(_get(shadow, "follow_all", False)),
         shadow_poll_interval_sec=float(_get(shadow, "poll_interval_sec", 5)),
         shadow_jitter_sec=float(_get(shadow, "jitter_sec", 0.8)),
         shadow_fetch_limit=int(_get(shadow, "fetch_limit", 120)),
