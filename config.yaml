@@ -1,0 +1,59 @@
+target:
+  username: neobrother
+  address: "0x6297b93ea37ff92a57fd636410f3b71ebf74517e"
+
+api:
+  data_api_base: "https://data-api.polymarket.com"
+  timeout_sec: 20
+  # 仅用于验证/分析：最多拉多少条记录（越多越慢，Cloudflare 也可能节流）
+  activity_max_trades: 2000
+  closed_positions_max: 3000
+
+analysis:
+  # 用于“同秒连打/拆单”统计
+  same_second_cluster_gap_sec: 1
+  # 用于估算你 paper mode 里建议的合并窗口（你可改 1~2）
+  suggested_merge_window_sec: 2
+  # “来回手”识别：同一 asset 反向成交在该窗口内出现则算 round-trip
+  round_trip_window_sec: 600
+
+risk_budget_example:
+  # 这些是“用来算 k 的预算示例”，不涉及下单。你可以按自己资金体量改。
+  mdd_budget_usdc: 50
+  max_total_cost_exposure_usdc: 100
+
+polling_suggestion:
+  # 仅作为建议值输出，不会真的启动轮询
+  poll_interval_sec: 3
+  jitter_sec: 0.5
+
+# 影子交易（不下单）配置：用于树莓派跑一周观测
+shadow:
+  # 影子账户初始可用资金（USDC）
+  initial_cash_usdc: 400
+
+  # 轮询：建议别太激进，避免 Cloudflare/边缘限流
+  poll_interval_sec: 5
+  jitter_sec: 0.8
+  # 每次拉取最近 N 条 activity 来“追尾”，靠去重保证幂等
+  fetch_limit: 120
+
+  # 去重 / 合并
+  merge_window_sec: 2
+  dedupe_ttl_sec: 1209600  # 14 天
+
+  # 跟随缩放：按“成交成本敞口(USDC)”缩放（BUY 用 usdcSize，SELL 也按 usdcSize 近似）
+  k: 0.25
+  min_per_trade_usdc: 5
+  max_per_trade_usdc: 25
+
+  # 风控
+  max_market_exposure_usdc: 120
+  max_total_exposure_usdc: 240
+  daily_loss_limit_usdc: 60
+
+  # 滑点保护（以“你此刻可成交价 vs 他成交价”的绝对偏差计）
+  max_abs_slippage: 0.015
+
+  # 市场白名单：留空表示不过滤；否则只跟随这些 conditionId
+  condition_whitelist: []

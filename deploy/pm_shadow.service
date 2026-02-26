@@ -1,0 +1,23 @@
+[Unit]
+Description=Polymarket shadow copy-trading (no orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pm-shadow
+ExecStart=/opt/pm-shadow/.venv/bin/python /opt/pm-shadow/run_shadow.py --config /opt/pm-shadow/config.yaml --out-dir /opt/pm-shadow/reports --state-db /opt/pm-shadow/shadow_state.db --days 7
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+# hardening (optional)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/pm-shadow
+
+[Install]
+WantedBy=multi-user.target
+
