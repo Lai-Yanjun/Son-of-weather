@@ -153,4 +153,3 @@ sudo systemctl enable --now pm_shadow.service
 journalctl -u pm_shadow.service -f
 ```
 
-
