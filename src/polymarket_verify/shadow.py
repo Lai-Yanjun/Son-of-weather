@@ -395,6 +395,20 @@ def run_shadow(
             "shadow_last_seen_ts": int(last_seen),
         }
 
+    # 启动时立即写一份初始 KPI，便于确认运行状态与初始资金（无需等第一笔跟随）
+    if dual and db_live is not None:
+        kpi_s = _build_kpi(db, "SHADOW", None)
+        kpi_l = _build_kpi(db_live, "LIVE", db)
+        kpi_shadow_json.write_text(json.dumps(kpi_s, ensure_ascii=False, indent=2), encoding="utf-8")
+        kpi_shadow_md.write_text(_render_kpi_md(kpi=kpi_s), encoding="utf-8")
+        kpi_live_json.write_text(json.dumps(kpi_l, ensure_ascii=False, indent=2), encoding="utf-8")
+        kpi_live_md.write_text(_render_kpi_md(kpi=kpi_l), encoding="utf-8")
+    else:
+        mode_str = "LIVE" if live else "SHADOW"
+        kpi = _build_kpi(db, mode_str, None)
+        kpi_json_path.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
+        kpi_md_path.write_text(_render_kpi_md(kpi=kpi), encoding="utf-8")
+
     try:
         while True:
             now = int(time.time())
