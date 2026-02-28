@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
+
+from dotenv import load_dotenv
 
 from .clob_public import ClobPublicClient
 from .config_loader import AppConfig
@@ -232,18 +235,38 @@ def run_shadow(
     if dual and not live:
         live = True  # dual 必须同时跑 live
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    initial_cash_shadow = float(cfg.shadow_initial_cash_usdc)
+    live_initial_cash = initial_cash_shadow
+    live_initial_cash_source: str = "config"
+    api = DataApiClient(base_url=cfg.data_api_base, timeout_sec=cfg.timeout_sec)
+    clob = ClobPublicClient(timeout_sec=cfg.timeout_sec)
+    if live or dual:
+        load_dotenv(".env")
+        funder = os.getenv("FUNDER_ADDRESS")
+        if funder:
+            try:
+                val = api.get_value(user=str(funder).lower())
+                if val is not None and float(val) > 0:
+                    live_initial_cash = float(val)
+                    live_initial_cash_source = "data_api"
+            except Exception:
+                pass
+
     db = StateDB(state_db_path)
-    initial_cash = float(cfg.shadow_initial_cash_usdc)
-    db.set_initial_cash_if_zero(initial_cash)
+    if dual:
+        db.set_initial_cash_if_zero(initial_cash_shadow)
+    elif live:
+        db.set_initial_cash_if_zero(live_initial_cash)
+    else:
+        db.set_initial_cash_if_zero(initial_cash_shadow)
 
     db_live: StateDB | None = None
     if dual:
         path_live = live_state_db_path or (state_db_path.parent / f"{state_db_path.stem}_live{state_db_path.suffix}")
         db_live = StateDB(path_live)
-        db_live.set_initial_cash_if_zero(initial_cash)
+        db_live.set_initial_cash_if_zero(live_initial_cash)
 
-    api = DataApiClient(base_url=cfg.data_api_base, timeout_sec=cfg.timeout_sec)
-    clob = ClobPublicClient(timeout_sec=cfg.timeout_sec)
     whitelist = set(cfg.shadow_condition_whitelist)
     run_id = int(time.time())
 
@@ -317,7 +340,9 @@ def run_shadow(
             "ts": start_ts,
             "end_ts": end_ts,
             "cfg": {
-                "initial_cash_usdc": initial_cash,
+                "initial_cash_usdc": initial_cash_shadow,
+                "live_initial_cash_usdc": live_initial_cash if (live or dual) else None,
+                "live_initial_cash_source": live_initial_cash_source if (live or dual) else None,
                 "follow_all": bool(cfg.shadow_follow_all),
                 "k": cfg.shadow_k,
                 "min_per_trade_usdc": cfg.shadow_min_per_trade_usdc,
