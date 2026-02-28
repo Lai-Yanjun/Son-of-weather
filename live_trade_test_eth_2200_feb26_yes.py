@@ -83,6 +83,12 @@ def resolve_eth_2200_yes_market() -> ResolvedMarket:
     question = str(m.get("question") or "")
 
     clob_market = _get_json(f"{CLOB}/markets/{condition_id}")
+    # 该测试市场可能随时间关闭。关闭后不会有 orderbook，/price 会返回 404。
+    if bool(clob_market.get("closed")) or (clob_market.get("accepting_orders") is False):
+        raise RuntimeError(
+            "该 market 当前不接受下单/已关闭（accepting_orders=false 或 closed=true）。"
+            "请换一个仍在交易中的市场再做实盘测试。"
+        )
     tokens = clob_market.get("tokens") or []
     yes = next((t for t in tokens if str(t.get("outcome", "")).lower() == "yes"), None)
     if not yes:
@@ -104,12 +110,19 @@ def resolve_eth_2200_yes_market() -> ResolvedMarket:
 
 
 def get_best_bid_ask(token_id: str) -> tuple[Optional[float], Optional[float]]:
-    book = _get_json(f"{CLOB}/book", params={"token_id": token_id})
-    bids = [float(x["price"]) for x in (book.get("bids") or []) if "price" in x]
-    asks = [float(x["price"]) for x in (book.get("asks") or []) if "price" in x]
-    best_bid = max(bids) if bids else None
-    best_ask = min(asks) if asks else None
-    return best_bid, best_ask
+    # 旧版脚本用 /book，但该 endpoint 在部分环境会 404。
+    # 这里改为用 /price 组合近似得到 best_ask 与 best_bid：
+    # - side=BUY 返回买入该 token 的最佳价（通常≈best ask）
+    # - side=SELL 返回卖出该 token 的最佳价（通常≈best bid）
+    try:
+        buy = _get_json(f"{CLOB}/price", params={"token_id": token_id, "side": "BUY"})
+        sell = _get_json(f"{CLOB}/price", params={"token_id": token_id, "side": "SELL"})
+        best_ask = float(buy["price"])
+        best_bid = float(sell["price"])
+        return best_bid, best_ask
+    except Exception:
+        # 最差情况：拿不到任何报价时返回 None，让上层走退化路径
+        return None, None
 
 
 def quantize_down(price: float, tick: float) -> float:
