@@ -54,6 +54,52 @@ def _now_utc_date() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def _get_live_collateral_balance_usdc() -> tuple[float | None, str | None]:
+    """读取 CLOB collateral 余额（USDC），失败返回错误原因。"""
+    try:
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import ApiCreds, AssetType, BalanceAllowanceParams
+    except Exception as e:
+        return None, f"CLOB_IMPORT_ERROR:{type(e).__name__}"
+
+    pk = os.getenv("PRIVATE_KEY") or ""
+    funder = os.getenv("FUNDER_ADDRESS") or ""
+    sig_type = int(os.getenv("SIGNATURE_TYPE", "0"))
+    if not pk:
+        return None, "MISSING_PRIVATE_KEY"
+    if not funder:
+        return None, "MISSING_FUNDER_ADDRESS"
+
+    api_key = os.getenv("POLY_API_KEY") or ""
+    api_secret = os.getenv("POLY_SECRET") or ""
+    api_pass = os.getenv("POLY_PASSPHRASE") or ""
+    creds = None
+    if api_key and api_secret and api_pass:
+        creds = ApiCreds(api_key=api_key, api_secret=api_secret, api_passphrase=api_pass)
+
+    try:
+        client = ClobClient(
+            host="https://clob.polymarket.com",
+            chain_id=137,
+            key=pk,
+            creds=creds,
+            signature_type=sig_type,
+            funder=funder,
+        )
+        if creds is None:
+            derived = client.create_or_derive_api_creds()
+            client.set_api_creds(derived)
+
+        params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, token_id=None, signature_type=sig_type)
+        bal = client.get_balance_allowance(params)
+        raw = bal.get("balance") if isinstance(bal, dict) else getattr(bal, "balance", None)
+        if raw is None:
+            return None, "CLOB_BALANCE_MISSING"
+        return float(raw) / 1_000_000.0, None
+    except Exception as e:
+        return None, f"CLOB_BALANCE_ERROR:{type(e).__name__}"
+
+
 def _quantize_down(price: float, tick: float) -> float:
     if tick <= 0:
         return float(price)
@@ -262,8 +308,12 @@ def run_shadow(
     clob = ClobPublicClient(timeout_sec=cfg.timeout_sec)
     if live or dual:
         load_dotenv(".env")
-        funder = os.getenv("FUNDER_ADDRESS")
-        if funder:
+        funder = (os.getenv("FUNDER_ADDRESS") or "").strip()
+        clob_cash, clob_err = _get_live_collateral_balance_usdc()
+        if clob_cash is not None and float(clob_cash) > 0:
+            live_initial_cash = float(clob_cash)
+            live_initial_cash_source = "clob_collateral"
+        elif funder:
             try:
                 val = api.get_value(user=str(funder).lower())
                 if val is not None and float(val) > 0:
@@ -271,13 +321,22 @@ def run_shadow(
                     live_initial_cash_source = "data_api"
                 else:
                     live_initial_cash_source = "config_data_api_empty"
-                    live_initial_cash_warn = "Data API 返回空余额，live 初始资金回退到 config.shadow.initial_cash_usdc"
+                    live_initial_cash_warn = (
+                        "CLOB/Data API 余额均不可用，live 初始资金回退到 config.shadow.initial_cash_usdc"
+                        + (f" (clob={clob_err})" if clob_err else "")
+                    )
             except Exception as e:
                 live_initial_cash_source = "config_data_api_error"
-                live_initial_cash_warn = f"Data API 读取余额失败，live 初始资金回退到配置值: {type(e).__name__}"
+                live_initial_cash_warn = (
+                    f"CLOB 余额不可用且 Data API 读取失败，live 初始资金回退到配置值: {type(e).__name__}"
+                    + (f" (clob={clob_err})" if clob_err else "")
+                )
         else:
             live_initial_cash_source = "config_missing_funder"
-            live_initial_cash_warn = "未设置 FUNDER_ADDRESS，live 初始资金回退到 config.shadow.initial_cash_usdc"
+            live_initial_cash_warn = (
+                "未设置 FUNDER_ADDRESS，live 初始资金回退到 config.shadow.initial_cash_usdc"
+                + (f" (clob={clob_err})" if clob_err else "")
+            )
 
     db = StateDB(state_db_path)
     if dual:
