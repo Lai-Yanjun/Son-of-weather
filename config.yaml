@@ -60,3 +60,19 @@ shadow:
 
   # 市场白名单：留空表示不过滤；否则只跟随这些 conditionId
   condition_whitelist: []
+
+# 实盘（小额）配置：默认仍以 shadow 为主；只有显式 --live 才会发单
+live:
+  # 下单方式：默认 maker 风格（post-only），降低意外成交风险
+  post_only: true
+  # true 表示允许吃单（风险更高），通常和 post_only 互斥；命令行可用 --taker 覆盖
+  taker: false
+  # 订单类型：GTC 限价单（默认）或 FOK（更像立即成交）
+  order_type: "GTC"
+  # GTC 下单后多少秒撤单
+  cancel_after_sec: 10
+  # FOK 最坏价保护（仅 FOK 时使用）：worst_price = best_ask + slippage
+  slippage: 0.02
+  # 安全阈值：限制发单频率与单日花费（USDC）
+  max_orders_per_hour: 6
+  max_usdc_per_day: 50

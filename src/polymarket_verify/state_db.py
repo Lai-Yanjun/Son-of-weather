@@ -126,6 +126,30 @@ class StateDB:
                 """
             )
 
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS live_order_timings (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  run_id INTEGER NOT NULL,
+                  ts INTEGER NOT NULL,
+                  seen_ts INTEGER NOT NULL,
+                  trade_ts INTEGER NOT NULL,
+                  staleness_sec REAL NOT NULL,
+                  side TEXT NOT NULL,
+                  condition_id TEXT NOT NULL,
+                  token_id TEXT NOT NULL,
+                  usdc REAL NOT NULL,
+                  shares REAL NOT NULL,
+                  price REAL NOT NULL,
+                  ok INTEGER NOT NULL,
+                  order_id TEXT,
+                  reason TEXT,
+                  ack_ts INTEGER NOT NULL,
+                  seen_to_ack_ms INTEGER NOT NULL
+                );
+                """
+            )
+
     def get_kv(self, key: str, default: str | None = None) -> str | None:
         with self._connect() as c:
             row = c.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
@@ -355,6 +379,71 @@ class StateDB:
                 """,
                 (int(ts), float(cash_usdc), float(equity_usdc), float(total_cost_exposure_usdc), float(unrealized_pnl_usdc)),
             )
+
+    def add_live_order_timing(
+        self,
+        *,
+        run_id: int,
+        ts: int,
+        seen_ts: int,
+        trade_ts: int,
+        staleness_sec: float,
+        side: str,
+        condition_id: str,
+        token_id: str,
+        usdc: float,
+        shares: float,
+        price: float,
+        ok: bool,
+        order_id: str | None,
+        reason: str | None,
+        ack_ts: int,
+        seen_to_ack_ms: int,
+    ) -> None:
+        with self._connect() as c:
+            c.execute(
+                """
+                INSERT INTO live_order_timings(
+                  run_id, ts, seen_ts, trade_ts, staleness_sec, side, condition_id, token_id,
+                  usdc, shares, price, ok, order_id, reason, ack_ts, seen_to_ack_ms
+                )
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    int(run_id),
+                    int(ts),
+                    int(seen_ts),
+                    int(trade_ts),
+                    float(staleness_sec),
+                    str(side),
+                    str(condition_id),
+                    str(token_id),
+                    float(usdc),
+                    float(shares),
+                    float(price),
+                    1 if ok else 0,
+                    str(order_id) if order_id else None,
+                    str(reason) if reason else None,
+                    int(ack_ts),
+                    int(seen_to_ack_ms),
+                ),
+            )
+
+    def list_live_seen_to_ack_ms(self, *, run_id: int, limit: int = 2000) -> list[int]:
+        with self._connect() as c:
+            rows = c.execute(
+                "SELECT seen_to_ack_ms FROM live_order_timings WHERE run_id = ? ORDER BY id DESC LIMIT ?",
+                (int(run_id), int(limit)),
+            ).fetchall()
+        return [int(r["seen_to_ack_ms"]) for r in rows]
+
+    def list_equity_since(self, *, start_ts: int) -> list[float]:
+        with self._connect() as c:
+            rows = c.execute(
+                "SELECT equity_usdc FROM equity_snapshots WHERE ts >= ? ORDER BY ts ASC",
+                (int(start_ts),),
+            ).fetchall()
+        return [float(r["equity_usdc"]) for r in rows]
 
     def dump_debug(self) -> str:
         st = self.get_ledger_state()

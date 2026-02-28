@@ -28,37 +28,33 @@ python -m venv .venv
 - `reports/neobrother_report.md`
 - `reports/neobrother_stats.json`
 
-## 实盘测试（极小额，下单需你自行承担风险）
+## 实盘（小额）运行（统一入口：run_shadow.py）
 
-本项目也提供一个“只针对单一市场的实盘测试脚本”（默认 dry-run，不会下单；需要显式 `--live` 才会发单）：
+本项目的实盘小额测试已收敛为一个入口：`run_shadow.py`（默认 shadow，不下单；只有显式 `--live` 才会真实发单）。
 
-- `live_trade_test_eth_2200_feb26_yes.py`：ETH > 2200（2/26）买 YES
+1) 配置 `.env`
 
-步骤：
+复制 `.env.example` 为 `.env`，填入：
+- `PRIVATE_KEY` / `SIGNATURE_TYPE` / `FUNDER_ADDRESS`
+- `POLY_API_KEY` / `POLY_SECRET` / `POLY_PASSPHRASE`（可用 `gen_clob_api_creds.py` 生成）
 
-1) 安装依赖（会额外安装 `py-clob-client`）
-
-```bash
-.\.venv\Scripts\python -m pip install -r requirements.txt
-```
-
-2) 配置 `.env`
-
-复制 `.env.example` 为 `.env`，填入 `PRIVATE_KEY`、`SIGNATURE_TYPE`、`FUNDER_ADDRESS`。
-
-3) 先 dry-run 看计划
+2) dry-run（不下单）
 
 ```bash
-.\.venv\Scripts\python live_trade_test_eth_2200_feb26_yes.py --usdc 1
+.\.venv\Scripts\python run_shadow.py --days 0.02
 ```
 
-4) 真下单（会创建/派生 API creds、并发一笔极小额订单）
+3) live（小额实盘；默认 post-only GTC + 10 秒撤单；风险自负）
 
 ```bash
-.\.venv\Scripts\python live_trade_test_eth_2200_feb26_yes.py --usdc 1 --live
+.\.venv\Scripts\python run_shadow.py --days 0.02 --live
 ```
 
-注意：脚本会在 GTC 下单后默认 10 秒撤单；如果你要测试立即成交可用 `--order-type FOK`（风险更高）。
+如果你要更激进的吃单测试（风险更高）：
+
+```bash
+.\.venv\Scripts\python run_shadow.py --days 0.02 --live --taker
+```
 
 ## 生成/派生 API creds（不下单）
 
@@ -89,7 +85,8 @@ python -m venv .venv
 
 `config.yaml` 新增了 `shadow:` 段，默认值已经按“400u 跑一周”给好：
 - `initial_cash_usdc: 400`
-- `k: 0.25`（按成交成本敞口缩放）
+- `follow_all: true`（尽量全部跟随；仍受限于映射失败/现金不足/无仓位可卖）
+- `k: 0.5`（按成交成本敞口缩放）
 - `min_per_trade_usdc: 5` / `max_per_trade_usdc: 25`
 - `max_abs_slippage: 0.015`
 - `max_market_exposure_usdc: 120` / `max_total_exposure_usdc: 240`

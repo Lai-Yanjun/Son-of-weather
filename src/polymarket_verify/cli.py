@@ -18,10 +18,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     api = DataApiClient(base_url=cfg.data_api_base, timeout_sec=cfg.timeout_sec)
-
-    trades = list(api.iter_activity_trades(user=cfg.address, max_trades=cfg.activity_max_trades))
-    positions = api.get_positions(user=cfg.address)
-    closed_positions = list(api.iter_closed_positions(user=cfg.address, max_items=cfg.closed_positions_max))
+    try:
+        trades = list(api.iter_activity_trades(user=cfg.address, max_trades=cfg.activity_max_trades))
+        positions = api.get_positions(user=cfg.address)
+        closed_positions = list(api.iter_closed_positions(user=cfg.address, max_items=cfg.closed_positions_max))
+    finally:
+        api.close()
 
     min_ts = min((t.timestamp for t in trades), default=None)
     max_ts = max((t.timestamp for t in trades), default=None)

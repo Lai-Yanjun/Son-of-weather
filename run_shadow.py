@@ -6,11 +6,13 @@ from pathlib import Path
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Polymarket 跟单：影子交易（不下单）跑数脚本")
+    p = argparse.ArgumentParser(description="Polymarket 跟单：shadow/live 统一入口（默认 shadow）")
     p.add_argument("--config", default="config.yaml", help="配置文件路径（默认 config.yaml）")
     p.add_argument("--out-dir", default="reports", help="输出目录（默认 reports/）")
     p.add_argument("--state-db", default="shadow_state.db", help="状态数据库（默认 shadow_state.db）")
     p.add_argument("--days", type=float, default=7.0, help="运行时长（天），默认 7")
+    p.add_argument("--live", action="store_true", help="启用实盘小额（默认不下单）")
+    p.add_argument("--taker", action="store_true", help="允许吃单（风险更高；会覆盖 post-only）")
     return p
 
 
@@ -27,7 +29,16 @@ def main() -> int:
     out_dir = Path(args.out_dir)
     state_db_path = Path(args.state_db)
     duration_sec = int(float(args.days) * 86400)
-    return int(run_shadow(cfg=cfg, out_dir=out_dir, state_db_path=state_db_path, duration_sec=duration_sec))
+    return int(
+        run_shadow(
+            cfg=cfg,
+            out_dir=out_dir,
+            state_db_path=state_db_path,
+            duration_sec=duration_sec,
+            live=bool(args.live),
+            taker=bool(args.taker),
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -43,6 +43,14 @@ class AppConfig:
     shadow_max_abs_slippage: float
     shadow_condition_whitelist: list[str]
 
+    live_post_only: bool
+    live_taker: bool
+    live_order_type: str
+    live_cancel_after_sec: int
+    live_slippage: float
+    live_max_orders_per_hour: int
+    live_max_usdc_per_day: float
+
 
 def _get(d: dict[str, Any], key: str, default: Any = None) -> Any:
     return d[key] if key in d else default
@@ -60,6 +68,7 @@ def load_config(path: str | Path) -> AppConfig:
     risk = raw.get("risk_budget_example", {}) or {}
     polling = raw.get("polling_suggestion", {}) or {}
     shadow = raw.get("shadow", {}) or {}
+    live = raw.get("live", {}) or {}
 
     return AppConfig(
         username=str(target["username"]),
@@ -91,5 +100,13 @@ def load_config(path: str | Path) -> AppConfig:
         shadow_daily_loss_limit_usdc=float(_get(shadow, "daily_loss_limit_usdc", 60)),
         shadow_max_abs_slippage=float(_get(shadow, "max_abs_slippage", 0.015)),
         shadow_condition_whitelist=[str(x) for x in (_get(shadow, "condition_whitelist", []) or [])],
+
+        live_post_only=bool(_get(live, "post_only", True)),
+        live_taker=bool(_get(live, "taker", False)),
+        live_order_type=str(_get(live, "order_type", "GTC")).upper(),
+        live_cancel_after_sec=int(_get(live, "cancel_after_sec", 10)),
+        live_slippage=float(_get(live, "slippage", 0.02)),
+        live_max_orders_per_hour=int(_get(live, "max_orders_per_hour", 6)),
+        live_max_usdc_per_day=float(_get(live, "max_usdc_per_day", 50)),
     )
 

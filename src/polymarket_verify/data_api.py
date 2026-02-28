@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
 import httpx
@@ -8,13 +7,11 @@ import httpx
 from .models import ActivityTrade, ClosedPosition, Position
 
 
-@dataclass(frozen=True)
 class DataApiClient:
-    base_url: str = "https://data-api.polymarket.com"
-    timeout_sec: float = 20.0
-
-    def _client(self) -> httpx.Client:
-        return httpx.Client(
+    def __init__(self, *, base_url: str = "https://data-api.polymarket.com", timeout_sec: float = 20.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout_sec = float(timeout_sec)
+        self._http = httpx.Client(
             base_url=self.base_url,
             timeout=self.timeout_sec,
             headers={
@@ -23,6 +20,15 @@ class DataApiClient:
                 "user-agent": "pm-copytrader-verify/0.1",
             },
         )
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> "DataApiClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        self.close()
 
     def get_activity(
         self,
@@ -52,10 +58,9 @@ class DataApiClient:
         if end is not None:
             params["end"] = end
 
-        with self._client() as c:
-            r = c.get("/activity", params=params)
-            r.raise_for_status()
-            return r.json()
+        r = self._http.get("/activity", params=params)
+        r.raise_for_status()
+        return r.json()
 
     def iter_activity_trades(
         self,
@@ -93,26 +98,23 @@ class DataApiClient:
                 break
 
     def get_positions(self, *, user: str) -> list[Position]:
-        with self._client() as c:
-            r = c.get("/positions", params={"user": user})
-            r.raise_for_status()
-            data = r.json()
+        r = self._http.get("/positions", params={"user": user})
+        r.raise_for_status()
+        data = r.json()
         return [Position.model_validate(x) for x in data]
 
     def get_value(self, *, user: str) -> float:
-        with self._client() as c:
-            r = c.get("/value", params={"user": user})
-            r.raise_for_status()
-            data = r.json()
+        r = self._http.get("/value", params={"user": user})
+        r.raise_for_status()
+        data = r.json()
         if not data:
             return 0.0
         return float(data[0].get("value", 0.0))
 
     def get_closed_positions_page(self, *, user: str, limit: int, offset: int) -> list[dict[str, Any]]:
-        with self._client() as c:
-            r = c.get("/closed-positions", params={"user": user, "limit": limit, "offset": offset})
-            r.raise_for_status()
-            return r.json()
+        r = self._http.get("/closed-positions", params={"user": user, "limit": limit, "offset": offset})
+        r.raise_for_status()
+        return r.json()
 
     def iter_closed_positions(self, *, user: str, max_items: int = 3000) -> Iterable[ClosedPosition]:
         fetched = 0

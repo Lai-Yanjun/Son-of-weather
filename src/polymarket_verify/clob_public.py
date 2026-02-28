@@ -29,20 +29,26 @@ class MarketInfo:
 class ClobPublicClient:
     def __init__(self, *, base_url: str = DEFAULT_CLOB_BASE, timeout_sec: float = 20.0) -> None:
         self._base_url = base_url.rstrip("/")
-        self._timeout = timeout_sec
-
-    def _client(self) -> httpx.Client:
-        return httpx.Client(
+        self._timeout = float(timeout_sec)
+        self._http = httpx.Client(
             base_url=self._base_url,
             timeout=self._timeout,
             headers={"accept": "application/json", "user-agent": "pm-shadow/0.1"},
         )
 
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> "ClobPublicClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        self.close()
+
     def get_market_info(self, condition_id: str) -> MarketInfo:
-        with self._client() as c:
-            r = c.get(f"/markets/{condition_id}")
-            r.raise_for_status()
-            m: dict[str, Any] = r.json()
+        r = self._http.get(f"/markets/{condition_id}")
+        r.raise_for_status()
+        m: dict[str, Any] = r.json()
 
         raw_tokens = m.get("tokens") or []
         tokens: list[MarketToken] = []
@@ -95,11 +101,10 @@ class ClobPublicClient:
     def get_best_prices(self, token_id: str) -> tuple[float, float]:
         # /price: side=BUY 给出“买入该 token 的最佳价”（通常可视为 best ask）
         #        side=SELL 给出“卖出该 token 的最佳价”（通常可视为 best bid）
-        with self._client() as c:
-            buy = c.get("/price", params={"token_id": token_id, "side": "BUY"})
-            buy.raise_for_status()
-            sell = c.get("/price", params={"token_id": token_id, "side": "SELL"})
-            sell.raise_for_status()
+        buy = self._http.get("/price", params={"token_id": token_id, "side": "BUY"})
+        buy.raise_for_status()
+        sell = self._http.get("/price", params={"token_id": token_id, "side": "SELL"})
+        sell.raise_for_status()
         bj = buy.json()
         sj = sell.json()
         return float(bj["price"]), float(sj["price"])
