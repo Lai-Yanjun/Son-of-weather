@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dual", action="store_true", help="shadow 与 live 同时跑，双账本对比延迟影响（会启用 --live）")
     p.add_argument("--taker", action="store_true", help="允许吃单（风险更高；会覆盖 post-only）")
     p.add_argument("--reset-state", action="store_true", help="启动前删除状态库（state-db 与 live-state-db）")
-    p.add_argument("--sync-live-cash", action="store_true", help="启动时强制把 live 账本现金同步为 Data API 余额")
+    p.add_argument("--sync-live-cash", action="store_true", help="启动时强制同步实时现金（dual 下 shadow/live 同步为同一初始值）")
     return p
 
 

@@ -340,7 +340,11 @@ def run_shadow(
 
     db = StateDB(state_db_path)
     if dual:
-        db.set_initial_cash_if_zero(initial_cash_shadow)
+        if sync_live_cash:
+            # dual 对比要同一起跑线：shadow 与 live 都同步为同一实时现金
+            db.force_set_cash(live_initial_cash)
+        else:
+            db.set_initial_cash_if_zero(initial_cash_shadow)
     elif live:
         if sync_live_cash:
             db.force_set_cash(live_initial_cash)
