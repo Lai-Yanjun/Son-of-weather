@@ -226,10 +226,21 @@ def run_shadow(
     duration_sec: int,
     live: bool = False,
     taker: bool = False,
+    dual: bool = False,
+    live_state_db_path: Path | None = None,
 ) -> int:
+    if dual and not live:
+        live = True  # dual 必须同时跑 live
     out_dir.mkdir(parents=True, exist_ok=True)
     db = StateDB(state_db_path)
-    db.set_initial_cash_if_zero(cfg.shadow_initial_cash_usdc)
+    initial_cash = float(cfg.shadow_initial_cash_usdc)
+    db.set_initial_cash_if_zero(initial_cash)
+
+    db_live: StateDB | None = None
+    if dual:
+        path_live = live_state_db_path or (state_db_path.parent / f"{state_db_path.stem}_live{state_db_path.suffix}")
+        db_live = StateDB(path_live)
+        db_live.set_initial_cash_if_zero(initial_cash)
 
     api = DataApiClient(base_url=cfg.data_api_base, timeout_sec=cfg.timeout_sec)
     clob = ClobPublicClient(timeout_sec=cfg.timeout_sec)
@@ -248,12 +259,21 @@ def run_shadow(
             cancel_after_sec=int(cfg.live_cancel_after_sec),
             slippage=float(cfg.live_slippage),
         )
+    shadow_exec_live: ShadowExecutor | None = None
+    if dual and db_live is not None:
+        shadow_exec_live = ShadowExecutor(db=db_live)
 
     start_ts = int(run_id)
     end_ts = start_ts + int(duration_sec)
-    log_path = out_dir / f"shadow_{cfg.username}_{start_ts}.jsonl"
-    kpi_json_path = out_dir / "shadow_kpi.json"
-    kpi_md_path = out_dir / "shadow_kpi.md"
+    report_prefix = "dual" if dual else ("live" if live else "shadow")
+    log_path = out_dir / f"{report_prefix}_{cfg.username}_{start_ts}.jsonl"
+    kpi_json_path = out_dir / f"{report_prefix}_kpi.json"
+    kpi_md_path = out_dir / f"{report_prefix}_kpi.md"
+    if dual:
+        kpi_shadow_json = out_dir / "shadow_kpi.json"
+        kpi_shadow_md = out_dir / "shadow_kpi.md"
+        kpi_live_json = out_dir / "live_kpi.json"
+        kpi_live_md = out_dir / "live_kpi.md"
 
     # KPI in-memory
     follow = 0
@@ -269,6 +289,10 @@ def run_shadow(
     last_equity = _compute_equity(db, clob)
     if daily_start is None:
         db.set_kv(daily_key, f"{float(last_equity['equity_usdc']):.12f}")
+    if dual and db_live is not None:
+        eq_live = _compute_equity(db_live, clob)
+        if db_live.get_kv(daily_key) is None:
+            db_live.set_kv(daily_key, f"{float(eq_live['equity_usdc']):.12f}")
 
     last_snapshot_at = 0
     snapshot_interval_sec = 300
@@ -293,7 +317,7 @@ def run_shadow(
             "ts": start_ts,
             "end_ts": end_ts,
             "cfg": {
-                "initial_cash_usdc": cfg.shadow_initial_cash_usdc,
+                "initial_cash_usdc": initial_cash,
                 "follow_all": bool(cfg.shadow_follow_all),
                 "k": cfg.shadow_k,
                 "min_per_trade_usdc": cfg.shadow_min_per_trade_usdc,
@@ -309,8 +333,10 @@ def run_shadow(
                 "condition_whitelist": cfg.shadow_condition_whitelist,
                 "live": bool(live),
                 "taker": bool(taker),
+                "dual": bool(dual),
             },
             "state_db": str(state_db_path),
+            "live_state_db": str(db_live.path) if db_live is not None else None,
             "shadow_last_seen_ts": last_seen,
         },
     )
@@ -318,24 +344,33 @@ def run_shadow(
     run_start_key = f"run_start_equity:{int(start_ts)}"
     if db.get_kv(run_start_key) is None:
         db.set_kv(run_start_key, f"{float(last_equity['equity_usdc']):.12f}")
+    if dual and db_live is not None:
+        if db_live.get_kv(run_start_key) is None:
+            eq_live = _compute_equity(db_live, clob)
+            db_live.set_kv(run_start_key, f"{float(eq_live['equity_usdc']):.12f}")
 
-    def _build_kpi() -> dict[str, Any]:
-        eq = _compute_equity(db, clob)
+    def _build_kpi(
+        db_equity: StateDB,
+        mode_str: str,
+        db_live_timings: StateDB | None = None,
+    ) -> dict[str, Any]:
+        eq = _compute_equity(db_equity, clob)
         equity_now = float(eq["equity_usdc"])
         cash_now = float(eq["cash_usdc"])
 
-        equity_start = float(db.get_kv(run_start_key, f"{equity_now:.12f}") or equity_now)
+        equity_start = float(db_equity.get_kv(run_start_key, f"{equity_now:.12f}") or equity_now)
         pnl = equity_now - equity_start
         pnl_pct = (pnl / max(1e-9, equity_start)) * 100.0
 
-        series = db.list_equity_since(start_ts=start_ts)
+        series = db_equity.list_equity_since(start_ts=start_ts)
         if not series or abs(series[-1] - equity_now) > 1e-9:
             series = list(series) + [equity_now]
         dd = max_drawdown(series)
         peak = max(series) if series else equity_now
         mdd_pct = (dd.mdd_abs / max(1e-9, float(peak))) * 100.0
 
-        live_ms = db.list_live_seen_to_ack_ms(run_id=int(start_ts), limit=2000)
+        db_lt = db_live_timings if db_live_timings is not None else db_equity
+        live_ms = db_lt.list_live_seen_to_ack_ms(run_id=int(start_ts), limit=2000)
         live_sum = summarize([float(x) for x in live_ms]) if live_ms else {}
 
         slip_sum = summarize(slippage_abs_samples) if slippage_abs_samples else {}
@@ -343,7 +378,7 @@ def run_shadow(
         return {
             "run_id": int(start_ts),
             "utc_date": _now_utc_date(),
-            "mode": "LIVE" if live else "SHADOW",
+            "mode": mode_str,
             "follow": int(follow),
             "skip": int(skip),
             "groups": int(groups),
@@ -373,6 +408,9 @@ def run_shadow(
                 if db.get_kv(daily_key) is None:
                     last_equity = _compute_equity(db, clob)
                     db.set_kv(daily_key, f"{float(last_equity['equity_usdc']):.12f}")
+                if dual and db_live is not None and db_live.get_kv(daily_key) is None:
+                    eq_live = _compute_equity(db_live, clob)
+                    db_live.set_kv(daily_key, f"{float(eq_live['equity_usdc']):.12f}")
 
             if now - last_snapshot_at >= snapshot_interval_sec:
                 last_equity = _compute_equity(db, clob)
@@ -383,7 +421,21 @@ def run_shadow(
                     total_cost_exposure_usdc=float(last_equity["total_cost_exposure_usdc"]),
                     unrealized_pnl_usdc=float(last_equity["unrealized_pnl_usdc"]),
                 )
-                _write_jsonl(log_path, {"type": "snapshot", "ts": now, "equity": last_equity})
+                snap_obj: dict[str, Any] = {"type": "snapshot", "ts": now}
+                if dual and db_live is not None:
+                    eq_live = _compute_equity(db_live, clob)
+                    db_live.add_equity_snapshot(
+                        ts=now,
+                        cash_usdc=float(eq_live["cash_usdc"]),
+                        equity_usdc=float(eq_live["equity_usdc"]),
+                        total_cost_exposure_usdc=float(eq_live["total_cost_exposure_usdc"]),
+                        unrealized_pnl_usdc=float(eq_live["unrealized_pnl_usdc"]),
+                    )
+                    snap_obj["equity_shadow"] = last_equity
+                    snap_obj["equity_live"] = eq_live
+                else:
+                    snap_obj["equity"] = last_equity
+                _write_jsonl(log_path, snap_obj)
                 last_snapshot_at = now
 
             # circuit breaker
@@ -516,7 +568,68 @@ def run_shadow(
                     side = mt.side.upper()
                     shares = you_cost / max(1e-12, float(exec_price))
                     # live 下单用更安全的 maker 价格；taker 时使用可成交参考价
-                    if live and live_exec is not None:
+                    if dual and live and live_exec is not None and shadow_exec_live is not None:
+                        # dual 模式：先 shadow（模拟无延迟），再 live，成功则同步到 live 账本
+                        action_s = Action(
+                            run_id=int(start_ts),
+                            seen_ts=int(seen_ts),
+                            trade_ts=int(mt.ts_last),
+                            condition_id=mt.condition_id,
+                            outcome_index=int(mt.outcome_index),
+                            token_id=str(mapping.token_id),
+                            side=side,
+                            usdc=float(you_cost),
+                            shares=float(shares),
+                            price=float(exec_price),
+                            tick_size=float(mapping.tick_size),
+                            neg_risk=bool(mapping.neg_risk),
+                        )
+                        shadow_exec.execute(action_s)
+                        if side == "BUY":
+                            live_price = _quantize_down(float(exec_price) - float(mapping.tick_size), float(mapping.tick_size)) if not (taker or cfg.live_taker) else float(exec_price)
+                            live_price = max(float(mapping.tick_size), live_price)
+                        else:
+                            live_price = _quantize_up(float(exec_price) + float(mapping.tick_size), float(mapping.tick_size)) if not (taker or cfg.live_taker) else float(exec_price)
+                        action_l = Action(
+                            run_id=int(start_ts),
+                            seen_ts=int(seen_ts),
+                            trade_ts=int(mt.ts_last),
+                            condition_id=mt.condition_id,
+                            outcome_index=int(mt.outcome_index),
+                            token_id=str(mapping.token_id),
+                            side=side,
+                            usdc=float(you_cost),
+                            shares=float(shares),
+                            price=float(live_price),
+                            tick_size=float(mapping.tick_size),
+                            neg_risk=bool(mapping.neg_risk),
+                        )
+                        exec_result = live_exec.execute(action_l)
+                        db.add_live_order_timing(
+                            run_id=int(start_ts),
+                            ts=int(decision_ts),
+                            seen_ts=int(seen_ts),
+                            trade_ts=int(mt.ts_last),
+                            staleness_sec=float(int(seen_ts) - int(mt.ts_last)),
+                            side=str(side),
+                            condition_id=str(mapping.condition_id),
+                            token_id=str(mapping.token_id),
+                            usdc=float(you_cost),
+                            shares=float(shares),
+                            price=float(live_price),
+                            ok=bool(exec_result.ok),
+                            order_id=exec_result.order_id,
+                            reason=exec_result.reason,
+                            ack_ts=int(exec_result.ack_ts),
+                            seen_to_ack_ms=int(exec_result.seen_to_ack_ms),
+                        )
+                        if not exec_result.ok:
+                            fail_reason = exec_result.reason or "LIVE_POST_FAILED"
+                            skip_reasons[fail_reason] = skip_reasons.get(fail_reason, 0) + 1
+                        else:
+                            shadow_exec_live.execute(action_l)
+                        action = action_l
+                    elif live and live_exec is not None:
                         if side == "BUY":
                             if bool(taker or cfg.live_taker):
                                 live_price = float(exec_price)
@@ -564,6 +677,9 @@ def run_shadow(
                         if not exec_result.ok:
                             fail_reason = exec_result.reason or "LIVE_POST_FAILED"
                             skip_reasons[fail_reason] = skip_reasons.get(fail_reason, 0) + 1
+                        else:
+                            # LIVE 成交成功：同步更新影子账本，报告权益与实盘一致
+                            shadow_exec.execute(action)
                     else:
                         # shadow 执行：写入影子账本
                         action = Action(
@@ -621,19 +737,37 @@ def run_shadow(
 
                 # KPI 增量写（cheap）
                 if int(time.time()) - last_kpi_write_at >= 10:
-                    kpi = _build_kpi()
-                    kpi_json_path.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
-                    kpi_md_path.write_text(_render_kpi_md(kpi=kpi), encoding="utf-8")
+                    if dual and db_live is not None:
+                        kpi_s = _build_kpi(db, "SHADOW", None)
+                        kpi_l = _build_kpi(db_live, "LIVE", db)
+                        kpi_shadow_json.write_text(json.dumps(kpi_s, ensure_ascii=False, indent=2), encoding="utf-8")
+                        kpi_shadow_md.write_text(_render_kpi_md(kpi=kpi_s), encoding="utf-8")
+                        kpi_live_json.write_text(json.dumps(kpi_l, ensure_ascii=False, indent=2), encoding="utf-8")
+                        kpi_live_md.write_text(_render_kpi_md(kpi=kpi_l), encoding="utf-8")
+                    else:
+                        mode_str = "LIVE" if live else "SHADOW"
+                        kpi = _build_kpi(db, mode_str, None)
+                        kpi_json_path.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
+                        kpi_md_path.write_text(_render_kpi_md(kpi=kpi), encoding="utf-8")
                     last_kpi_write_at = int(time.time())
 
             time.sleep(max(0.5, cfg.shadow_poll_interval_sec + random.uniform(-cfg.shadow_jitter_sec, cfg.shadow_jitter_sec)))
 
         # 结束时写一次最终 KPI（即使中途没触发增量写）
-        kpi = _build_kpi()
-        kpi_json_path.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
-        kpi_md_path.write_text(_render_kpi_md(kpi=kpi), encoding="utf-8")
-
-        _write_jsonl(log_path, {"type": "end", "ts": int(time.time()), "kpi": kpi})
+        if dual and db_live is not None:
+            kpi_s = _build_kpi(db, "SHADOW", None)
+            kpi_l = _build_kpi(db_live, "LIVE", db)
+            kpi_shadow_json.write_text(json.dumps(kpi_s, ensure_ascii=False, indent=2), encoding="utf-8")
+            kpi_shadow_md.write_text(_render_kpi_md(kpi=kpi_s), encoding="utf-8")
+            kpi_live_json.write_text(json.dumps(kpi_l, ensure_ascii=False, indent=2), encoding="utf-8")
+            kpi_live_md.write_text(_render_kpi_md(kpi=kpi_l), encoding="utf-8")
+            _write_jsonl(log_path, {"type": "end", "ts": int(time.time()), "kpi_shadow": kpi_s, "kpi_live": kpi_l})
+        else:
+            mode_str = "LIVE" if live else "SHADOW"
+            kpi = _build_kpi(db, mode_str, None)
+            kpi_json_path.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
+            kpi_md_path.write_text(_render_kpi_md(kpi=kpi), encoding="utf-8")
+            _write_jsonl(log_path, {"type": "end", "ts": int(time.time()), "kpi": kpi})
         return 0
     finally:
         api.close()

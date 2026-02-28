@@ -29,7 +29,7 @@ polling_suggestion:
 
 # 影子交易（不下单）配置：用于树莓派跑一周观测
 shadow:
-  # 影子账户初始可用资金（USDC）
+  # 影子账户初始可用资金（USDC）。--dual 时 shadow 与 live 双账本都用此值，建议设为与实盘一致以便对比延迟影响
   initial_cash_usdc: 400
 
   # 全部跟随模式：开启后不再因 TOO_SMALL/滑点/敞口/熔断/白名单而跳过（仍受限于：映射失败、现金不足、没仓位可卖）
