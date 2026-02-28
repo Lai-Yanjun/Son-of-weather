@@ -216,7 +216,7 @@ class LiveExecutor:
                     resp = self._client.post_order(signed, OrderType.FOK)
                 else:
                     signed = self._client.create_order(
-                        OrderArgs(token_id=action.token_id, price=float(action.price), size=float(action.usdc), side=BUY),
+                        OrderArgs(token_id=action.token_id, price=float(action.price), size=float(action.shares), side=BUY),
                         opts,
                     )
                     resp = self._client.post_order(signed, OrderType.GTC, post_only=bool(self._post_only))
@@ -248,7 +248,7 @@ class LiveExecutor:
                         reason="NO_POSITION_TO_SELL",
                         detail="available_shares=0",
                         ack_ts=ack_ts,
-                        seen_to_ack_ms=int(_now_ms() - t0),
+                        seen_to_ack_ms=int(max(0, _now_ms() - seen_ms)),
                         cancel_resp=None,
                     )
                 sell_shares = min(float(action.shares), float(avail))

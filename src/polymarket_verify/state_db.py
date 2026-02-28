@@ -240,6 +240,15 @@ class StateDB:
             )
         return True
 
+    def force_set_cash(self, cash_usdc: float) -> None:
+        # 显式覆盖账本现金（用于启动时与实盘余额对齐）
+        now = int(time.time())
+        with self._connect() as c:
+            c.execute(
+                "UPDATE ledger_state SET cash_usdc = ?, updated_at = ? WHERE id = 1",
+                (float(cash_usdc), now),
+            )
+
     def list_positions(self) -> list[LedgerPosition]:
         with self._connect() as c:
             rows = c.execute("SELECT * FROM ledger_positions WHERE shares > 0").fetchall()

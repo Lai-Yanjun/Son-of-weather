@@ -231,14 +231,33 @@ def run_shadow(
     taker: bool = False,
     dual: bool = False,
     live_state_db_path: Path | None = None,
+    reset_state: bool = False,
+    sync_live_cash: bool = False,
 ) -> int:
     if dual and not live:
         live = True  # dual 必须同时跑 live
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    path_live: Path | None = None
+    if dual:
+        path_live = live_state_db_path or (state_db_path.parent / f"{state_db_path.stem}_live{state_db_path.suffix}")
+
+    if reset_state:
+        targets = [state_db_path]
+        if path_live is not None:
+            targets.append(path_live)
+        for p in targets:
+            try:
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                # 删除失败时保持原状态继续运行，避免启动直接中断
+                pass
+
     initial_cash_shadow = float(cfg.shadow_initial_cash_usdc)
     live_initial_cash = initial_cash_shadow
     live_initial_cash_source: str = "config"
+    live_initial_cash_warn: str | None = None
     api = DataApiClient(base_url=cfg.data_api_base, timeout_sec=cfg.timeout_sec)
     clob = ClobPublicClient(timeout_sec=cfg.timeout_sec)
     if live or dual:
@@ -250,22 +269,35 @@ def run_shadow(
                 if val is not None and float(val) > 0:
                     live_initial_cash = float(val)
                     live_initial_cash_source = "data_api"
-            except Exception:
-                pass
+                else:
+                    live_initial_cash_source = "config_data_api_empty"
+                    live_initial_cash_warn = "Data API 返回空余额，live 初始资金回退到 config.shadow.initial_cash_usdc"
+            except Exception as e:
+                live_initial_cash_source = "config_data_api_error"
+                live_initial_cash_warn = f"Data API 读取余额失败，live 初始资金回退到配置值: {type(e).__name__}"
+        else:
+            live_initial_cash_source = "config_missing_funder"
+            live_initial_cash_warn = "未设置 FUNDER_ADDRESS，live 初始资金回退到 config.shadow.initial_cash_usdc"
 
     db = StateDB(state_db_path)
     if dual:
         db.set_initial_cash_if_zero(initial_cash_shadow)
     elif live:
-        db.set_initial_cash_if_zero(live_initial_cash)
+        if sync_live_cash:
+            db.force_set_cash(live_initial_cash)
+        else:
+            db.set_initial_cash_if_zero(live_initial_cash)
     else:
         db.set_initial_cash_if_zero(initial_cash_shadow)
 
     db_live: StateDB | None = None
     if dual:
-        path_live = live_state_db_path or (state_db_path.parent / f"{state_db_path.stem}_live{state_db_path.suffix}")
+        assert path_live is not None
         db_live = StateDB(path_live)
-        db_live.set_initial_cash_if_zero(live_initial_cash)
+        if sync_live_cash:
+            db_live.force_set_cash(live_initial_cash)
+        else:
+            db_live.set_initial_cash_if_zero(live_initial_cash)
 
     whitelist = set(cfg.shadow_condition_whitelist)
     run_id = int(time.time())
@@ -305,6 +337,9 @@ def run_shadow(
     skip_reasons: dict[str, int] = {}
     slippage_abs_samples: list[float] = []
     last_kpi_write_at = 0
+    # live 风控计数：按“尝试发单”计，保守限制频率与预算
+    live_order_attempt_ts: list[int] = []
+    live_buy_budget_by_utc_day: dict[str, float] = {}
 
     # circuit breaker: daily start equity
     daily_key = f"daily_start_equity:{_now_utc_date()}"
@@ -359,12 +394,26 @@ def run_shadow(
                 "live": bool(live),
                 "taker": bool(taker),
                 "dual": bool(dual),
+                "reset_state": bool(reset_state),
+                "sync_live_cash": bool(sync_live_cash),
             },
             "state_db": str(state_db_path),
             "live_state_db": str(db_live.path) if db_live is not None else None,
             "shadow_last_seen_ts": last_seen,
         },
     )
+    if live_initial_cash_warn and (live or dual):
+        _write_jsonl(
+            log_path,
+            {
+                "type": "warn",
+                "ts": int(time.time()),
+                "where": "live_initial_cash",
+                "msg": live_initial_cash_warn,
+                "source": live_initial_cash_source,
+                "live_initial_cash_usdc": float(live_initial_cash),
+            },
+        )
 
     run_start_key = f"run_start_equity:{int(start_ts)}"
     if db.get_kv(run_start_key) is None:
@@ -606,8 +655,19 @@ def run_shadow(
                 if reason is None and mapping is not None and exec_price is not None:
                     side = mt.side.upper()
                     shares = you_cost / max(1e-12, float(exec_price))
+                    if live:
+                        now_ts = int(time.time())
+                        hour_start = now_ts - 3600
+                        live_order_attempt_ts = [x for x in live_order_attempt_ts if int(x) >= hour_start]
+                        if len(live_order_attempt_ts) >= int(cfg.live_max_orders_per_hour):
+                            reason = "LIVE_MAX_ORDERS_PER_HOUR"
+                        elif side == "BUY":
+                            day_key = _now_utc_date()
+                            used = float(live_buy_budget_by_utc_day.get(day_key, 0.0))
+                            if (used + float(you_cost)) > float(cfg.live_max_usdc_per_day):
+                                reason = "LIVE_MAX_USDC_PER_DAY"
                     # live 下单用更安全的 maker 价格；taker 时使用可成交参考价
-                    if dual and live and live_exec is not None and shadow_exec_live is not None:
+                    if reason is None and dual and live and live_exec is not None and shadow_exec_live is not None:
                         # dual 模式：先 shadow（模拟无延迟），再 live，成功则同步到 live 账本
                         action_s = Action(
                             run_id=int(start_ts),
@@ -643,6 +703,10 @@ def run_shadow(
                             tick_size=float(mapping.tick_size),
                             neg_risk=bool(mapping.neg_risk),
                         )
+                        live_order_attempt_ts.append(int(time.time()))
+                        if side == "BUY":
+                            day_key = _now_utc_date()
+                            live_buy_budget_by_utc_day[day_key] = float(live_buy_budget_by_utc_day.get(day_key, 0.0)) + float(you_cost)
                         exec_result = live_exec.execute(action_l)
                         db.add_live_order_timing(
                             run_id=int(start_ts),
@@ -668,7 +732,7 @@ def run_shadow(
                         else:
                             shadow_exec_live.execute(action_l)
                         action = action_l
-                    elif live and live_exec is not None:
+                    elif reason is None and live and live_exec is not None:
                         if side == "BUY":
                             if bool(taker or cfg.live_taker):
                                 live_price = float(exec_price)
@@ -694,6 +758,10 @@ def run_shadow(
                             tick_size=float(mapping.tick_size),
                             neg_risk=bool(mapping.neg_risk),
                         )
+                        live_order_attempt_ts.append(int(time.time()))
+                        if side == "BUY":
+                            day_key = _now_utc_date()
+                            live_buy_budget_by_utc_day[day_key] = float(live_buy_budget_by_utc_day.get(day_key, 0.0)) + float(you_cost)
                         exec_result = live_exec.execute(action)
                         db.add_live_order_timing(
                             run_id=int(start_ts),
