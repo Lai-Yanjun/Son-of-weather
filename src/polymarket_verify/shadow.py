@@ -206,14 +206,18 @@ def run_shadow(*, cfg: AppConfig, out_dir: Path, state_db_path: Path, duration_s
     last_snapshot_at = 0
     snapshot_interval_sec = 300
 
-    # 首次启动默认“从现在开始跟随”，避免把历史成交当作实时信号
+    # 默认“从现在开始跟随”，避免把历史成交当作实时信号。
+    # 注意：如果 state_db 里残留了很旧的 last_seen_ts，也要向前钳制到 now-60，
+    # 否则会触发“回放历史成交”，导致你观测到的延迟被历史堆积污染。
     last_seen_key = "shadow_last_seen_ts"
     last_seen_ts = db.get_kv(last_seen_key)
+    clamp_min = int(time.time()) - 60
     if last_seen_ts is None:
         # 留一点 overlap，避免启动瞬间漏掉刚发生的一笔
-        last_seen_ts = str(int(time.time()) - 60)
+        last_seen_ts = str(clamp_min)
         db.set_kv(last_seen_key, last_seen_ts)
-    last_seen = int(last_seen_ts)
+    last_seen = max(int(last_seen_ts), int(clamp_min))
+    db.set_kv(last_seen_key, str(int(last_seen)))
 
     _write_jsonl(
         log_path,
