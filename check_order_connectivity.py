@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import time
+import urllib.request
 from typing import Any
 
 import httpx
@@ -40,6 +41,30 @@ def _get_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
     r = httpx.get(url, params=params, timeout=20.0, headers={"accept": "application/json", "user-agent": "pm-order-check/0.1"})
     r.raise_for_status()
     return r.json()
+
+
+def _setup_proxy_env(*, proxy: str | None, http_proxy: str | None, https_proxy: str | None, no_proxy: str) -> None:
+    if proxy:
+        os.environ["http_proxy"] = str(proxy)
+        os.environ["https_proxy"] = str(proxy)
+        os.environ["HTTP_PROXY"] = str(proxy)
+        os.environ["HTTPS_PROXY"] = str(proxy)
+    if http_proxy:
+        os.environ["http_proxy"] = str(http_proxy)
+        os.environ["HTTP_PROXY"] = str(http_proxy)
+    if https_proxy:
+        os.environ["https_proxy"] = str(https_proxy)
+        os.environ["HTTPS_PROXY"] = str(https_proxy)
+    os.environ["no_proxy"] = str(no_proxy)
+    os.environ["NO_PROXY"] = str(no_proxy)
+
+
+def _probe_public_ip() -> str:
+    try:
+        with urllib.request.urlopen("https://ifconfig.me/ip", timeout=10) as r:
+            return r.read().decode("utf-8", errors="ignore").strip()
+    except Exception as e:
+        return f"(ip_probe_failed:{type(e).__name__})"
 
 
 def build_client() -> ClobClient:
@@ -104,7 +129,31 @@ def main() -> int:
     ap.add_argument("--usdc", type=float, default=2.0)
     ap.add_argument("--cancel-after-sec", type=int, default=5)
     ap.add_argument("--live", action="store_true")
+    ap.add_argument("--proxy", default=None, help="同时设置 HTTP/HTTPS 代理，例如 http://127.0.0.1:7890")
+    ap.add_argument("--http-proxy", default=None, help="仅设置 HTTP 代理")
+    ap.add_argument("--https-proxy", default=None, help="仅设置 HTTPS 代理")
+    ap.add_argument("--no-proxy", default="localhost,127.0.0.1", help="NO_PROXY，默认 localhost,127.0.0.1")
     args = ap.parse_args()
+
+    _setup_proxy_env(
+        proxy=args.proxy,
+        http_proxy=args.http_proxy,
+        https_proxy=args.https_proxy,
+        no_proxy=str(args.no_proxy),
+    )
+    print("NETWORK:")
+    print(
+        json.dumps(
+            {
+                "http_proxy": os.getenv("http_proxy") or os.getenv("HTTP_PROXY"),
+                "https_proxy": os.getenv("https_proxy") or os.getenv("HTTPS_PROXY"),
+                "no_proxy": os.getenv("no_proxy") or os.getenv("NO_PROXY"),
+                "egress_ip": _probe_public_ip(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
     token_id, best_ask, tick, neg_risk = pick_trade_token(user=str(args.user).lower(), scan=int(args.scan))
     maker_price = max(float(tick), float(best_ask) - float(tick))

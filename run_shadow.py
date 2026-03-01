@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -17,6 +18,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--taker", action="store_true", help="允许吃单（风险更高；会覆盖 post-only）")
     p.add_argument("--reset-state", action="store_true", help="启动前删除状态库（state-db 与 live-state-db）")
     p.add_argument("--sync-live-cash", action="store_true", help="启动时强制同步实时现金（dual 下 shadow/live 同步为同一初始值）")
+    p.add_argument("--proxy", default=None, help="同时设置 HTTP/HTTPS 代理，例如 http://127.0.0.1:7890")
+    p.add_argument("--http-proxy", default=None, help="仅设置 HTTP 代理")
+    p.add_argument("--https-proxy", default=None, help="仅设置 HTTPS 代理")
+    p.add_argument("--no-proxy", default="localhost,127.0.0.1", help="NO_PROXY，默认 localhost,127.0.0.1")
     return p
 
 
@@ -30,6 +35,21 @@ def main() -> int:
 
     args = build_parser().parse_args()
     cfg = load_config(args.config)
+    # 可选：显式给脚本进程注入代理环境，避免 systemd/后台任务绕过代理
+    if args.proxy:
+        os.environ["http_proxy"] = str(args.proxy)
+        os.environ["https_proxy"] = str(args.proxy)
+        os.environ["HTTP_PROXY"] = str(args.proxy)
+        os.environ["HTTPS_PROXY"] = str(args.proxy)
+    if args.http_proxy:
+        os.environ["http_proxy"] = str(args.http_proxy)
+        os.environ["HTTP_PROXY"] = str(args.http_proxy)
+    if args.https_proxy:
+        os.environ["https_proxy"] = str(args.https_proxy)
+        os.environ["HTTPS_PROXY"] = str(args.https_proxy)
+    if args.no_proxy is not None:
+        os.environ["no_proxy"] = str(args.no_proxy)
+        os.environ["NO_PROXY"] = str(args.no_proxy)
     out_dir = Path(args.out_dir)
     state_db_path = Path(args.state_db)
     live_state_db_path = Path(args.live_state_db) if args.live_state_db else None

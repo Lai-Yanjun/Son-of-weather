@@ -10,6 +10,13 @@ ExecStart=/opt/pm-shadow/.venv/bin/python /opt/pm-shadow/run_shadow.py --config 
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# If your API requests must go through Clash/HTTP proxy, uncomment:
+# Environment=http_proxy=http://127.0.0.1:7890
+# Environment=https_proxy=http://127.0.0.1:7890
+# Environment=HTTP_PROXY=http://127.0.0.1:7890
+# Environment=HTTPS_PROXY=http://127.0.0.1:7890
+# Environment=no_proxy=localhost,127.0.0.1
+# Environment=NO_PROXY=localhost,127.0.0.1
 
 # hardening (optional)
 NoNewPrivileges=true
