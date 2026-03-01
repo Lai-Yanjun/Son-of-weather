@@ -774,6 +774,10 @@ def run_shadow(
                 if reason is None and mapping is not None and exec_price is not None:
                     side = mt.side.upper()
                     shares = you_cost / max(1e-12, float(exec_price))
+                    min_order_size = float(mapping.minimum_order_size)
+                    # 交易所硬规则：下单份额必须不小于该市场最小下单量
+                    if shares + 1e-12 < min_order_size:
+                        reason = "BELOW_MIN_ORDER_SIZE"
                     if live:
                         now_ts = int(time.time())
                         hour_start = now_ts - 3600
