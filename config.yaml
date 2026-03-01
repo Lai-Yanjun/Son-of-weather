@@ -46,9 +46,9 @@ shadow:
   dedupe_ttl_sec: 1209600  # 14 天
 
   # 跟随缩放：按“成交成本敞口(USDC)”缩放（BUY 用 usdcSize，SELL 也按 usdcSize 近似）
-  k: 0.5
+  k: 1.0
   min_per_trade_usdc: 0
-  max_per_trade_usdc: 25
+  max_per_trade_usdc: 1000
 
   # 风控
   max_market_exposure_usdc: 120
