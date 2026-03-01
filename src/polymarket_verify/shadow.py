@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from .clob_public import ClobPublicClient
 from .config_loader import AppConfig
 from .data_api import DataApiClient
-from .executor import Action, LiveExecutor, ShadowExecutor
+from .executor import Action, ExecResult, LiveExecutor, ShadowExecutor
 from .models import ActivityTrade
 from .state_db import MarketMapping, StateDB
 from .stats import max_drawdown, summarize
@@ -212,6 +212,31 @@ def _write_jsonl(path: Path, obj: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+def _apply_confirmed_live_fill(*, exec_shadow: ShadowExecutor, base_action: Action, exec_result: ExecResult) -> bool:
+    # 仅将“已确认成交”的份额记入账本，避免把“挂单成功但未成交”误记为持仓/现金变化
+    filled_shares = float(exec_result.filled_shares)
+    fill_price = float(exec_result.avg_fill_price)
+    if filled_shares <= 1e-12 or fill_price <= 0:
+        return False
+    fill_usdc = float(exec_result.filled_usdc) if float(exec_result.filled_usdc) > 0 else float(filled_shares * fill_price)
+    filled_action = Action(
+        run_id=int(base_action.run_id),
+        seen_ts=int(base_action.seen_ts),
+        trade_ts=int(base_action.trade_ts),
+        condition_id=str(base_action.condition_id),
+        outcome_index=int(base_action.outcome_index),
+        token_id=str(base_action.token_id),
+        side=str(base_action.side),
+        usdc=float(fill_usdc),
+        shares=float(filled_shares),
+        price=float(fill_price),
+        tick_size=float(base_action.tick_size),
+        neg_risk=bool(base_action.neg_risk),
+    )
+    exec_shadow.execute(filled_action)
+    return True
 
 
 def _render_kpi_md(*, kpi: dict[str, Any]) -> str:
@@ -793,7 +818,7 @@ def run_shadow(
                             fail_reason = exec_result.reason or "LIVE_POST_FAILED"
                             skip_reasons[fail_reason] = skip_reasons.get(fail_reason, 0) + 1
                         else:
-                            shadow_exec_live.execute(action_l)
+                            _apply_confirmed_live_fill(exec_shadow=shadow_exec_live, base_action=action_l, exec_result=exec_result)
                         action = action_l
                     elif reason is None and live and live_exec is not None:
                         if side == "BUY":
@@ -848,8 +873,7 @@ def run_shadow(
                             fail_reason = exec_result.reason or "LIVE_POST_FAILED"
                             skip_reasons[fail_reason] = skip_reasons.get(fail_reason, 0) + 1
                         else:
-                            # LIVE 成交成功：同步更新影子账本，报告权益与实盘一致
-                            shadow_exec.execute(action)
+                            _apply_confirmed_live_fill(exec_shadow=shadow_exec, base_action=action, exec_result=exec_result)
                     else:
                         # shadow 执行：写入影子账本
                         action = Action(

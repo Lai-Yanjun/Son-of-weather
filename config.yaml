@@ -36,8 +36,8 @@ shadow:
   follow_all: true
 
   # 轮询：建议别太激进，避免 Cloudflare/边缘限流
-  poll_interval_sec: 5
-  jitter_sec: 0.8
+  poll_interval_sec: 1.5
+  jitter_sec: 0.1
   # 每次拉取最近 N 条 activity 来“追尾”，靠去重保证幂等
   fetch_limit: 120
 
@@ -47,7 +47,7 @@ shadow:
 
   # 跟随缩放：按“成交成本敞口(USDC)”缩放（BUY 用 usdcSize，SELL 也按 usdcSize 近似）
   k: 0.5
-  min_per_trade_usdc: 5
+  min_per_trade_usdc: 0
   max_per_trade_usdc: 25
 
   # 风控
@@ -64,15 +64,15 @@ shadow:
 # 实盘（小额）配置：默认仍以 shadow 为主；只有显式 --live 才会发单
 live:
   # 下单方式：默认 maker 风格（post-only），降低意外成交风险
-  post_only: true
+  post_only: false
   # true 表示允许吃单（风险更高），通常和 post_only 互斥；命令行可用 --taker 覆盖
-  taker: false
+  taker: true
   # 订单类型：GTC 限价单（默认）或 FOK（更像立即成交）
-  order_type: "GTC"
+  order_type: "FOK"
   # GTC 下单后多少秒撤单
-  cancel_after_sec: 10
+  cancel_after_sec: 3
   # FOK 最坏价保护（仅 FOK 时使用）：worst_price = best_ask + slippage
-  slippage: 0.02
+  slippage: 0.03
   # 安全阈值：限制发单频率与单日花费（USDC）
-  max_orders_per_hour: 6
-  max_usdc_per_day: 50
+  max_orders_per_hour: 50
+  max_usdc_per_day: 1000

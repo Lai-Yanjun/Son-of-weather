@@ -58,6 +58,9 @@ class ExecResult:
     ack_ts: int
     seen_to_ack_ms: int
     cancel_resp: Optional[dict[str, Any]]
+    filled_shares: float
+    avg_fill_price: float
+    filled_usdc: float
 
 
 class ShadowExecutor:
@@ -86,6 +89,9 @@ class ShadowExecutor:
                     ack_ts=ack_ts,
                     seen_to_ack_ms=int((ack_ts - int(action.seen_ts)) * 1000),
                     cancel_resp=None,
+                    filled_shares=float(action.shares),
+                    avg_fill_price=float(action.price),
+                    filled_usdc=float(max(0.0, float(action.shares) * float(action.price))),
                 )
 
             if action.side.upper() == "SELL":
@@ -107,6 +113,9 @@ class ShadowExecutor:
                     ack_ts=ack_ts,
                     seen_to_ack_ms=int((ack_ts - int(action.seen_ts)) * 1000),
                     cancel_resp=None,
+                    filled_shares=float(action.shares),
+                    avg_fill_price=float(action.price),
+                    filled_usdc=float(max(0.0, float(action.shares) * float(action.price))),
                 )
 
             return ExecResult(
@@ -118,6 +127,9 @@ class ShadowExecutor:
                 ack_ts=ack_ts,
                 seen_to_ack_ms=int((ack_ts - int(action.seen_ts)) * 1000),
                 cancel_resp=None,
+                filled_shares=0.0,
+                avg_fill_price=0.0,
+                filled_usdc=0.0,
             )
         except Exception as e:
             return ExecResult(
@@ -129,6 +141,9 @@ class ShadowExecutor:
                 ack_ts=ack_ts,
                 seen_to_ack_ms=int((ack_ts - int(action.seen_ts)) * 1000),
                 cancel_resp=None,
+                filled_shares=0.0,
+                avg_fill_price=0.0,
+                filled_usdc=0.0,
             )
 
 
@@ -191,6 +206,63 @@ class LiveExecutor:
                 return float(p.size)
         return 0.0
 
+    @staticmethod
+    def _to_float(v: Any) -> float | None:
+        try:
+            if v is None:
+                return None
+            return float(v)
+        except Exception:
+            return None
+
+    @classmethod
+    def _extract_fill_from_payload(cls, payload: dict[str, Any]) -> tuple[float, float]:
+        # 兼容不同返回字段命名，尽量从响应/订单详情中提取“已成交份额 + 均价”
+        share_keys = [
+            "size_matched",
+            "sizeMatched",
+            "filled_size",
+            "filledSize",
+            "matched_size",
+            "matchedSize",
+            "executed_size",
+            "executedSize",
+        ]
+        price_keys = [
+            "avg_price",
+            "avgPrice",
+            "fill_price",
+            "fillPrice",
+            "execution_price",
+            "executionPrice",
+            "price",
+        ]
+        shares = 0.0
+        avg_price = 0.0
+        for k in share_keys:
+            x = cls._to_float(payload.get(k))
+            if x is not None and x > 0:
+                shares = float(x)
+                break
+        for k in price_keys:
+            x = cls._to_float(payload.get(k))
+            if x is not None and x > 0:
+                avg_price = float(x)
+                break
+        return float(max(0.0, shares)), float(max(0.0, avg_price))
+
+    def _query_order_fill(self, *, order_id: str) -> tuple[float, float]:
+        try:
+            od = self._client.get_order(str(order_id))
+            if isinstance(od, dict):
+                # 某些版本结构为 {"order": {...}}
+                if isinstance(od.get("order"), dict):
+                    return self._extract_fill_from_payload(od["order"])
+                return self._extract_fill_from_payload(od)
+        except Exception:
+            pass
+        return 0.0, 0.0
+
     def execute(self, action: Action) -> ExecResult:
         seen_ms = int(action.seen_ts) * 1000
         ack_ts = int(time.time())
@@ -227,6 +299,18 @@ class LiveExecutor:
                 if order_id and self._order_type != "FOK":
                     time.sleep(max(0, int(self._cancel_after_sec)))
                     cancel_resp = self._client.cancel_orders([str(order_id)])
+                filled_shares, avg_fill_price = self._extract_fill_from_payload(resp if isinstance(resp, dict) else {})
+                if order_id:
+                    q_shares, q_price = self._query_order_fill(order_id=str(order_id))
+                    if q_shares > 0:
+                        filled_shares = float(q_shares)
+                    if q_price > 0:
+                        avg_fill_price = float(q_price)
+                if self._order_type == "FOK" and bool(resp.get("success", True)) and filled_shares <= 0:
+                    # FOK 成功通常意味着“全部成交”，若交易所回包未提供成交字段，用请求值兜底
+                    filled_shares = float(max(0.0, action.shares))
+                    avg_fill_price = float(max(0.0, action.price))
+                filled_usdc = float(max(0.0, filled_shares * avg_fill_price))
                 return ExecResult(
                     ok=bool(resp.get("success", True)),
                     action_side="BUY",
@@ -236,6 +320,9 @@ class LiveExecutor:
                     ack_ts=ack_ts,
                     seen_to_ack_ms=int(max(0, ack_ms - seen_ms)),
                     cancel_resp=cancel_resp,
+                    filled_shares=float(filled_shares),
+                    avg_fill_price=float(avg_fill_price),
+                    filled_usdc=float(filled_usdc),
                 )
 
             if side == "SELL":
@@ -250,6 +337,9 @@ class LiveExecutor:
                         ack_ts=ack_ts,
                         seen_to_ack_ms=int(max(0, _now_ms() - seen_ms)),
                         cancel_resp=None,
+                        filled_shares=0.0,
+                        avg_fill_price=0.0,
+                        filled_usdc=0.0,
                     )
                 sell_shares = min(float(action.shares), float(avail))
                 signed = self._client.create_order(
@@ -263,6 +353,14 @@ class LiveExecutor:
                 if order_id:
                     time.sleep(max(0, int(self._cancel_after_sec)))
                     cancel_resp = self._client.cancel_orders([str(order_id)])
+                filled_shares, avg_fill_price = self._extract_fill_from_payload(resp if isinstance(resp, dict) else {})
+                if order_id:
+                    q_shares, q_price = self._query_order_fill(order_id=str(order_id))
+                    if q_shares > 0:
+                        filled_shares = float(q_shares)
+                    if q_price > 0:
+                        avg_fill_price = float(q_price)
+                filled_usdc = float(max(0.0, filled_shares * avg_fill_price))
                 return ExecResult(
                     ok=bool(resp.get("success", True)),
                     action_side="SELL",
@@ -272,6 +370,9 @@ class LiveExecutor:
                     ack_ts=ack_ts,
                     seen_to_ack_ms=int(max(0, ack_ms - seen_ms)),
                     cancel_resp=cancel_resp,
+                    filled_shares=float(filled_shares),
+                    avg_fill_price=float(avg_fill_price),
+                    filled_usdc=float(filled_usdc),
                 )
 
             return ExecResult(
@@ -283,6 +384,9 @@ class LiveExecutor:
                 ack_ts=ack_ts,
                 seen_to_ack_ms=int(max(0, _now_ms() - seen_ms)),
                 cancel_resp=None,
+                filled_shares=0.0,
+                avg_fill_price=0.0,
+                filled_usdc=0.0,
             )
         except PolyApiException as e:
             ack_ts = int(time.time())
@@ -299,6 +403,9 @@ class LiveExecutor:
                 ack_ts=ack_ts,
                 seen_to_ack_ms=int(max(0, _now_ms() - seen_ms)),
                 cancel_resp=None,
+                filled_shares=0.0,
+                avg_fill_price=0.0,
+                filled_usdc=0.0,
             )
         except Exception as e:
             ack_ts = int(time.time())
@@ -311,5 +418,8 @@ class LiveExecutor:
                 ack_ts=ack_ts,
                 seen_to_ack_ms=int(max(0, _now_ms() - seen_ms)),
                 cancel_resp=None,
+                filled_shares=0.0,
+                avg_fill_price=0.0,
+                filled_usdc=0.0,
             )
 
