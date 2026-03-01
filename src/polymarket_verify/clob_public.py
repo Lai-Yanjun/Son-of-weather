@@ -74,7 +74,7 @@ class ClobPublicClient:
 
         q = m.get("question") or m.get("title") or ""
         minimum_order_size = float(m.get("minimum_order_size") or m.get("minimumOrderSize") or 0.0)
-        tick_size = float(m.get("tick_size") or m.get("tickSize") or 0.001)
+        tick_size = float(m.get("minimum_tick_size") or m.get("tick_size") or m.get("tickSize") or 0.001)
         neg_risk = bool(m.get("neg_risk") or m.get("negative_risk") or m.get("negativeRisk") or False)
 
         return MarketInfo(

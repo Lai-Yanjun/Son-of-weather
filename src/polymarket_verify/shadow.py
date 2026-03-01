@@ -239,6 +239,33 @@ def _apply_confirmed_live_fill(*, exec_shadow: ShadowExecutor, base_action: Acti
     return True
 
 
+def _refresh_market_mapping(
+    *,
+    clob: ClobPublicClient,
+    db: StateDB,
+    condition_id: str,
+    outcome_index: int,
+    outcome: str | None,
+) -> MarketMapping:
+    mi = clob.get_market_info(condition_id)
+    token_id = clob.resolve_token_id(
+        condition_id=condition_id,
+        outcome_index=outcome_index,
+        outcome=outcome,
+    )
+    mapping = MarketMapping(
+        condition_id=str(condition_id),
+        outcome_index=int(outcome_index),
+        token_id=str(token_id),
+        question=str(mi.question),
+        minimum_order_size=float(mi.minimum_order_size),
+        tick_size=float(mi.tick_size),
+        neg_risk=bool(mi.neg_risk),
+    )
+    db.upsert_market_mapping(mapping)
+    return mapping
+
+
 def _render_kpi_md(*, kpi: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("## 跟随交易实时报告（本次运行）")
@@ -677,24 +704,28 @@ def run_shadow(
                     mapping = db.get_market_mapping(condition_id=mt.condition_id, outcome_index=mt.outcome_index)
                     if mapping is None:
                         try:
-                            mi = clob.get_market_info(mt.condition_id)
-                            token_id = clob.resolve_token_id(
+                            mapping = _refresh_market_mapping(
+                                clob=clob,
+                                db=db,
                                 condition_id=mt.condition_id,
                                 outcome_index=mt.outcome_index,
                                 outcome=mt.outcome,
                             )
-                            mapping = MarketMapping(
-                                condition_id=mt.condition_id,
-                                outcome_index=int(mt.outcome_index),
-                                token_id=str(token_id),
-                                question=str(mi.question),
-                                minimum_order_size=float(mi.minimum_order_size),
-                                tick_size=float(mi.tick_size),
-                                neg_risk=bool(mi.neg_risk),
-                            )
-                            db.upsert_market_mapping(mapping)
                         except Exception as e:
                             reason = f"MAP_TOKEN_FAILED:{type(e).__name__}"
+                    elif live:
+                        # live/dual 下优先使用最新 market 元信息，避免旧缓存 tick 触发 invalid tick size
+                        try:
+                            mapping = _refresh_market_mapping(
+                                clob=clob,
+                                db=db,
+                                condition_id=mt.condition_id,
+                                outcome_index=mt.outcome_index,
+                                outcome=mt.outcome,
+                            )
+                        except Exception:
+                            # 刷新失败则回退到已有缓存，避免因为临时网络波动整体停摆
+                            pass
 
                 best_ask = best_bid = None
                 if reason is None and mapping is not None:
