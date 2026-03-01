@@ -5,16 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/pm-shadow
-ExecStart=/opt/pm-shadow/.venv/bin/python /opt/pm-shadow/run_shadow.py --config /opt/pm-shadow/config.yaml --out-dir /opt/pm-shadow/reports --state-db /opt/pm-shadow/shadow_state.db --days 7
+WorkingDirectory=/opt/pm-shadow/Son-of-weather
+ExecStart=/opt/pm-shadow/Son-of-weather/.venv/bin/python /opt/pm-shadow/Son-of-weather/run_shadow.py --config /opt/pm-shadow/Son-of-weather/config.yaml --out-dir /opt/pm-shadow/Son-of-weather/reports --state-db /opt/pm-shadow/Son-of-weather/shadow_state.db --days 7
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
 # If your API requests must go through Clash/HTTP proxy, uncomment:
-# Environment=http_proxy=http://127.0.0.1:7890
-# Environment=https_proxy=http://127.0.0.1:7890
-# Environment=HTTP_PROXY=http://127.0.0.1:7890
-# Environment=HTTPS_PROXY=http://127.0.0.1:7890
+# Environment=http_proxy=http://127.0.0.1:7897
+# Environment=https_proxy=http://127.0.0.1:7897
+# Environment=HTTP_PROXY=http://127.0.0.1:7897
+# Environment=HTTPS_PROXY=http://127.0.0.1:7897
 # Environment=no_proxy=localhost,127.0.0.1
 # Environment=NO_PROXY=localhost,127.0.0.1
 
@@ -23,7 +23,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/pm-shadow
+ReadWritePaths=/opt/pm-shadow/Son-of-weather
 
 [Install]
 WantedBy=multi-user.target
