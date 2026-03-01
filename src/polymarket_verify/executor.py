@@ -274,7 +274,9 @@ class LiveExecutor:
 
             if side == "BUY":
                 if self._order_type == "FOK":
+                    # 交易所价格边界约束：[0.001, 0.999]，避免 worst_price 越界触发 400
                     worst = float(action.price + self._slippage)
+                    worst = float(min(0.999, max(0.001, worst)))
                     signed = self._client.create_market_order(
                         MarketOrderArgs(
                             token_id=action.token_id,
